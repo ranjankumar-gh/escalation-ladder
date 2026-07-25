@@ -1,0 +1,22 @@
+[project]
+name = "escalation-ladder"
+version = "0.1.0"
+description = "Companion code for The 7 GenAI Architectures: one incident-triage implementation per rung."
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=0.40",
+    "pydantic>=2.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3", "matplotlib>=3.9"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["escalation_ladder*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
