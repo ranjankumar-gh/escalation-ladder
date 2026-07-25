@@ -7,7 +7,7 @@ the acquirer's added latency stays under our timeout.
 
 ## First checks
 
-1. `query_metric("payment-gateway", "p99_latency_ms", 60)` — look for a step change, not a spike.
+1. `query_metric("payment-gateway", "p99_latency_ms", 60)` - look for a step change, not a spike.
 2. Check the acquirer status page before assuming the fault is ours.
 
 ## Known trap
