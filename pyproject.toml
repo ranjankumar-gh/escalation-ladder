@@ -18,5 +18,10 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["escalation_ladder*"]
 
+# The runbook corpus is data, not code, and `runbooks/` is not a package. Without this a
+# non-editable install ships no .md files and runbook_paths() returns an empty list.
+[tool.setuptools.package-data]
+escalation_ladder = ["fixtures/runbooks/*.md"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
