@@ -1,0 +1,6 @@
+{
+  "299528d6fea3": "{\"service\":\"payment-gateway\",\"severity\":\"SEV1\",\"summary\":\"Customers' cards charged but order page never completes, leaving orders in limbo with no alerting.\",\"evidence\":\"their card was charged but the order page spun forever\",\"needs_human\":false}",
+  "81e3cee2a263": "{\"service\":\"search-api\",\"severity\":\"SEV3\",\"summary\":\"Search queries reported as slow for some enterprise tenants, with no dashboard confirmation.\",\"evidence\":\"Search feels slow for some enterprise tenants.\",\"needs_human\":false}",
+  "43ef86cda23e": "{\"service\":\"checkout-api\",\"severity\":\"SEV1\",\"summary\":\"Checkout is returning 500 errors, blocking order placement, while payment gateway appears healthy.\",\"evidence\":\"Checkout is returning 500s\",\"needs_human\":false}",
+  "bb807b12d60b": "{\"service\":\"notification-worker\",\"severity\":\"SEV3\",\"summary\":\"Confirmation emails are being delivered multiple times (3-7 duplicates) to customers.\",\"evidence\":\"Customers are getting the same confirmation email 3-7 times.\",\"needs_human\":false}"
+}

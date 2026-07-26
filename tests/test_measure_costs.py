@@ -79,3 +79,33 @@ def test_main_succeeds_with_no_rungs_registered(tmp_path):
     assert exit_code == 0
     written = out.read_text(encoding="utf-8")
     assert "| Rung |" in written
+
+
+def test_a_rung_whose_every_call_failed_reads_as_not_measured():
+    """Added with Chapter 4.
+
+    A rung that attempted calls and was billed for none of them measured nothing.
+    Averaging that to zeros would seat it in the table looking exactly like
+    Level 0, which genuinely is free - so a reader with no API key would read
+    "Level 1: 0 tokens" as a result rather than as a missing key.
+    """
+    failed = [
+        CostLedger(measurements=[Measurement("classify.ask", 0, 0, 3.1, 1)])
+        for _ in range(6)
+    ]
+    row = measure_costs.summarise_ledgers("Level 1: Prompt Application", failed)
+    assert row["Rung"] == "Level 1: Prompt Application"
+    assert row["Input tokens"] == "not measured"
+    assert row["p50 latency (ms)"] == "not measured"
+
+
+def test_level_zero_is_still_reported_as_genuinely_free():
+    """The counterpart: no model calls at all is a measurement, not a failure."""
+    free = [
+        CostLedger(measurements=[Measurement("rules.route", 0, 0, 0.0025, 0)])
+        for _ in range(6)
+    ]
+    row = measure_costs.summarise_ledgers("Level 0: Deterministic Code", free)
+    assert row["Model calls"] == 0
+    assert row["Input tokens"] == 0
+    assert row["p50 latency (ms)"] != "not measured"

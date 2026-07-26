@@ -55,6 +55,18 @@ def summarise_ledgers(rung: str, ledgers: list[CostLedger]) -> dict[str, object]
         row: dict[str, object] = dict.fromkeys(COLUMNS, 0)
         row["Rung"] = rung
         return row
+
+    # A rung that attempted calls and was billed for none of them measured nothing:
+    # every call failed. Averaging that to zeros would seat it in the table looking
+    # exactly like Level 0, which genuinely is free -- so a reader with no API key
+    # would read "Level 1: 0 tokens, 0ms" as a result rather than as a missing key.
+    attempted = sum(led.model_calls for led in ledgers)
+    billed = sum(led.total_input_tokens for led in ledgers)
+    if attempted and not billed:
+        unmeasured: dict[str, object] = dict.fromkeys(COLUMNS, "not measured")
+        unmeasured["Rung"] = rung
+        return unmeasured
+
     n = len(ledgers)
     latencies = [led.total_latency_ms for led in ledgers]
     return {
