@@ -38,6 +38,7 @@ Requires Python 3.12 or newer.
 
 ```
 escalation_ladder/
+  diagnose.py        Chapter 2's design-review tool -- standalone, see below
   instrument.py      cost measurement shared by every rung
   rungs.py           rung registry; each level module registers itself
   fixtures/          the simulated incident environment
@@ -47,3 +48,18 @@ scripts/
 
 Rung modules (`rules.py`, `classify.py`, `retrieve.py`, `workflow.py`, `tools.py`,
 `reasoning.py`, `agent.py`, `crew.py`) appear as their chapters land.
+
+## `diagnose.py` is not part of the triage system
+
+Chapter 2's `diagnose.py` is the one module here that is **not** a rung and not wired into the
+triage system. It imports nothing from the rest of the package, registers no rung, and never
+appears in the cost table. It encodes the Escalation Ladder's decision flowchart as executable
+predicates -- the Floor Test, the Termination Test, and the gates between them -- so you can
+run it on **your** systems during a design review.
+
+``` bash
+python escalation_ladder/diagnose.py
+```
+
+Fill in a `TaskProfile` for one request type at a time. Any question you leave as `None` makes
+the tool return `UNRESOLVED` and name the question rather than guess, which is the point.
