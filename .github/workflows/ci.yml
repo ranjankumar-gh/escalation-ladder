@@ -1,0 +1,130 @@
+name: CI
+
+# Two different questions, deliberately answered by two different jobs.
+#
+#   `floor`  - do the book's published numbers still reproduce against the
+#              versions they were measured on? This is the reproducibility
+#              guarantee a reader relies on when they clone a tag.
+#   `latest` - has a third party shipped something that breaks a claim the book
+#              states as fact? Chapter 4 asserts three `anthropic` internals
+#              (output_format merging into output_config, unsupported constraints
+#              being demoted into a field `description`, parsed_output being a
+#              nullable property). Any of those could change in a minor release
+#              without warning, and the errata page is downstream of finding out.
+#
+# The weekly schedule is what makes `latest` worth having: a break that arrives
+# between chapters should page the author, not the reader.
+#
+# No API key anywhere. Every test in this repo replays committed recordings or
+# runs deterministic code, which is a design constraint from Chapter 4 rather
+# than a convenience - see llm.py's RecordedCompleter.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Mondays, 06:00 UTC. Drift is only useful if it is found on a weekday.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  floor:
+    name: pinned floor (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install at the versions the book was measured against
+        run: |
+          python -m pip install --upgrade pip
+          # Exact versions from _book-manifest.yml's `stack`, exercised in
+          # Chapter 4 on 2026-07-26. Not the range - the point of this job is
+          # that these specific versions still work.
+          pip install "anthropic==0.120.0" "pydantic==2.13.4" "pytest>=8.4"
+          pip install -e . --no-deps
+
+      - name: Record resolved versions
+        run: |
+          {
+            echo "### Resolved versions (py${{ matrix.python }})"
+            echo '```'
+            pip freeze | grep -Ei '^(anthropic|pydantic|pydantic-core|pytest)=='
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Test
+        run: pytest -q
+
+      - name: Regenerate the retrieval numbers Chapter 5 publishes
+        # Needs no key. This step does NOT gate the build - the script always
+        # exits 0, because it is a reader-facing exploration tool rather than a
+        # test. The assertion lives in the suite above
+        # (test_context_recall_matches_the_published_numbers), which pins the
+        # exact figures. This step exists so the numbers are visible in the run
+        # summary and a drift can be read at a glance instead of reproduced.
+        run: |
+          {
+            echo "### Chapter 5 retrieval numbers"
+            echo '```'
+            python scripts/compare_retrievers.py
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  latest:
+    name: latest in range (drift detector)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install the newest versions the pins allow
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]" --upgrade
+
+      - name: Record resolved versions
+        run: |
+          {
+            echo "### Resolved versions (latest in range)"
+            echo '```'
+            pip freeze | grep -Ei '^(anthropic|pydantic|pydantic-core|pytest)=='
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: SDK contract tests
+        # Run these first and on their own, so a failure here is legible in the
+        # job list rather than buried in a full-suite summary. These are the
+        # tests that pin claims the BOOK makes about the SDK's internals; if one
+        # of them fails, prose needs correcting, not just code.
+        run: |
+          pytest -q tests/test_llm.py \
+            -k "effort_and_schema or unsupported_constraints or parsable_content"
+
+      - name: Full suite
+        run: pytest -q
+
+      - name: Retrieval numbers
+        # Informational, as in the `floor` job - the assertion is in the suite.
+        run: |
+          {
+            echo "### Chapter 5 retrieval numbers (latest in range)"
+            echo '```'
+            python scripts/compare_retrievers.py
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
