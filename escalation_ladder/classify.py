@@ -100,7 +100,14 @@ def build_user(incident: Incident) -> str:
     )
 
 
-def _normalized(text: str) -> str:
+def normalized(text: str) -> str:
+    """Collapse whitespace and case, and nothing else.
+
+    Public because Chapter 5 checks citations against retrieved passages the
+    same way this module checks quotes against reports. Two checks that forgive
+    different things produce two refusal counters that cannot be compared, so
+    there is one function rather than two.
+    """
     return " ".join(text.split()).casefold()
 
 
@@ -111,8 +118,8 @@ def evidence_supported(claim: Classification, incident: Incident) -> bool:
     has not invented anything. Nothing else is forgiven: a paraphrase fails
     this check, and so does a quote from a report nobody was shown.
     """
-    quote = _normalized(claim.evidence)
-    return bool(quote) and quote in _normalized(incident.report)
+    quote = normalized(claim.evidence)
+    return bool(quote) and quote in normalized(incident.report)
 
 
 def _unknown(reason: str) -> Classification:

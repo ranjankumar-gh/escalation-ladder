@@ -1,0 +1,5 @@
+{
+  "eeecee54c4da": "{\"service\":\"payment-gateway\",\"severity\":\"SEV2\",\"passage_id\":\"payment-gateway-timeouts\",\"quote\":\"`query_metric(\\\"payment-gateway\\\", \\\"p99_latency_ms\\\", 60)` - look for a step change, not a spike.\",\"next_step\":\"Query payment-gateway p99_latency_ms over the last 60 minutes, looking for a step change rather than a spike.\",\"needs_human\":false}",
+  "6c743b9071d9": "{\"service\":\"search-api\",\"severity\":\"SEV3\",\"passage_id\":\"search-latency\",\"quote\":\"Segment `p99_latency_ms` by tenant size. Tenants above 1M documents degrade first.\",\"next_step\":\"Segment p99_latency_ms by tenant size, since large tenants above 1M documents degrade first.\",\"needs_human\":false}",
+  "1a156f98d386": "{\"service\":\"checkout-api\",\"severity\":\"SEV1\",\"passage_id\":\"service-mesh-certificates\",\"quote\":\"Read the mesh sidecar logs for handshake failures. Expired mTLS certificates fail the\\n   handshake and the application layer reports a generic upstream error.\",\"next_step\":\"Read the mesh sidecar logs for handshake failures.\",\"needs_human\":false}"
+}
