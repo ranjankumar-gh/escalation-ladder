@@ -3,13 +3,16 @@ name = "escalation-ladder"
 version = "0.1.0"
 description = "Companion code for The 7 GenAI Architectures: one incident-triage implementation per rung."
 requires-python = ">=3.12"
+# Pinned in Chapter 3, which fixes the stack for the whole book. Chapter 3's own
+# code imports none of it -- the Level 0 slice is standard library only, and
+# these first matter in Chapter 4.
 dependencies = [
-    "anthropic>=0.40",
-    "pydantic>=2.9",
+    "anthropic>=0.120,<1.0",
+    "pydantic>=2.13,<3.0",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.3", "matplotlib>=3.9"]
+dev = ["pytest>=8.4", "matplotlib>=3.9"]
 
 [build-system]
 requires = ["setuptools>=68"]

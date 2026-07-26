@@ -58,6 +58,20 @@ def test_query_metric_values_are_in_a_plausible_range():
         assert 0.0 <= value <= 100.0
 
 
+def test_rate_metrics_are_fractions_not_percentages():
+    # Units must match the alert grammar rules.py parses. An alert reading
+    # `http_5xx_rate > 0.4` and a sample of this series have to be directly
+    # comparable, or Chapter 7's tools silently misreport every incident.
+    for metric in ("http_5xx_rate", "cpu_utilization", "connection_pool_in_use"):
+        for _, value in query_metric("checkout-api", metric, 60):
+            assert 0.0 <= value <= 1.0, f"{metric} is not a fraction"
+
+
+def test_latency_metric_is_still_milliseconds():
+    values = [v for _, v in query_metric("checkout-api", "p99_latency_ms", 60)]
+    assert max(values) > 100.0
+
+
 def test_query_metric_of_zero_or_negative_minutes_is_empty():
     assert query_metric("checkout-api", "http_5xx_rate", 0) == []
     assert query_metric("checkout-api", "http_5xx_rate", -5) == []

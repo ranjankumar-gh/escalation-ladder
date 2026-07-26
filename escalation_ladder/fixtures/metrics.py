@@ -14,11 +14,22 @@ from datetime import datetime, timedelta, timezone
 NOW = datetime(2026, 3, 21, 5, 0, 0, tzinfo=timezone.utc)
 
 # (floor, ceiling) per metric -- keeps generated values in a plausible range.
+#
+# Units match the alert grammar in rules.py, NOT percent: an alert reading
+# `http_5xx_rate > 0.4` and a sample from this series are directly comparable.
+# Chapter 3 has no reason to care, because Level 0 never queries this API - but
+# Chapter 7 builds tools over it, and a tool that compares 0.4 against a series
+# scaled 0-12 would report every incident as catastrophic.
+#
+# The series is deliberately NOT correlated with the seeded incidents yet: it is
+# uniform over the range, so a query during an incident window looks like any
+# other. Chapter 7 makes it incident-aware, which is where that behaviour is
+# load-bearing.
 _RANGES: dict[str, tuple[float, float]] = {
-    "http_5xx_rate": (0.0, 12.0),            # percent
+    "http_5xx_rate": (0.0, 0.6),             # fraction of requests
     "p99_latency_ms": (80.0, 4500.0),
-    "cpu_utilization": (5.0, 95.0),
-    "connection_pool_in_use": (0.0, 100.0),  # percent of pool
+    "cpu_utilization": (0.05, 0.99),         # fraction of cores
+    "connection_pool_in_use": (0.0, 1.0),    # fraction of pool
 }
 _DEFAULT_RANGE = (0.0, 100.0)
 
@@ -41,5 +52,5 @@ def query_metric(service: str, metric: str, minutes: int) -> list[tuple[str, flo
     for i in range(minutes):
         stamp = NOW - timedelta(minutes=minutes - 1 - i)
         value = low + _unit_value(service, metric, i) * (high - low)
-        series.append((stamp.isoformat().replace("+00:00", "Z"), round(value, 3)))
+        series.append((stamp.isoformat().replace("+00:00", "Z"), round(value, 4)))
     return series
