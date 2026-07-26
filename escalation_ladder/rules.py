@@ -203,7 +203,7 @@ def route(incident: Incident) -> RoutingDecision:
 
 @register_rung("Level 0: Deterministic Code")
 def run(incident: Incident) -> CostLedger:
-    """Rung entry point. Measured, so the zero row is measured rather than assumed."""
+    """Rung entry point. Measured, so the Zero Row is measured rather than assumed."""
     ledger = CostLedger()
 
     @measured("rules.route", ledger)
