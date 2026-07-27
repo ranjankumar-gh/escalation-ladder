@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from escalation_ladder.fixtures.deploys import Deploy, recent_deploys
@@ -7,7 +8,7 @@ from escalation_ladder.fixtures.incidents import (
     build_db,
     load_incidents,
 )
-from escalation_ladder.fixtures.metrics import query_metric
+from escalation_ladder.fixtures.metrics import _RANGES, query_metric
 from escalation_ladder.fixtures.runbooks_index import runbook_paths
 
 
@@ -100,3 +101,64 @@ def test_every_runbook_is_non_empty_markdown():
     for p in paths:
         assert p.suffix == ".md"
         assert p.read_text(encoding="utf-8").strip()
+
+
+# --------------------------------------------------------------------------
+# the metric series the runbooks promise, against the ones the fixture serves
+#
+# Added at Chapter 6's gate. Ch6's Failure Receipt lands on
+# notification-worker-duplicates, whose FIRST check is a ratio between two
+# series the fake metrics API does not have. Ch7 builds tools over that API, so
+# the gap stops being cosmetic there: the tool cannot execute the next step the
+# rung below hands it.
+#
+# The assertion is equality rather than a subset on purpose, so it fails in both
+# directions. Add a runbook naming another unserved metric and it goes red. Add
+# the two missing series in Ch7 and it ALSO goes red, forcing whoever does it to
+# delete this list and close the thread rather than leaving a stale allowance
+# behind.
+# --------------------------------------------------------------------------
+
+_METRIC_TOKEN = re.compile(r"`([a-z][a-z0-9_]{3,})`")
+_QUERY_METRIC = re.compile(r'query_metric\("[^"]+",\s*"([^"]+)"')
+
+# Backticked identifiers in the runbooks that are not metric series.
+_NOT_METRICS = {
+    "query_metric", "tenant_id", "created_at", "max_connections", "order_id",
+}
+
+# Owed by Chapter 7. Both come from notification-worker-duplicates: "Compare
+# `messages_sent` against `orders_created` for the same window. A ratio above
+# 1.1 means redelivery rather than a producer bug."
+OWED_BY_CH07 = {"messages_sent", "orders_created"}
+
+
+def referenced_metrics() -> set[str]:
+    """Every metric series the shipped runbooks tell an engineer to read."""
+    found: set[str] = set()
+    for path in runbook_paths():
+        text = path.read_text(encoding="utf-8")
+        found |= {t for t in _METRIC_TOKEN.findall(text) if t not in _NOT_METRICS}
+        found |= set(_QUERY_METRIC.findall(text))
+    return found
+
+
+def test_runbook_metrics_resolve_except_the_series_chapter_seven_owes():
+    missing = referenced_metrics() - set(_RANGES)
+    assert missing == OWED_BY_CH07, (
+        "The runbooks and the metrics fixture have drifted apart. Either a new "
+        "runbook names a series query_metric cannot serve, or Chapter 7 has "
+        "added one of the owed series - in which case delete it from "
+        "OWED_BY_CH07 and update the Ch6 open_threads entry in the book's "
+        f"_book-manifest.yml. Unserved right now: {sorted(missing)}"
+    )
+
+
+def test_the_owed_series_are_the_ones_chapter_sixs_receipt_depends_on():
+    """Pins the gap to its cause, so the list above cannot quietly become junk."""
+    duplicates = next(
+        p for p in runbook_paths() if p.stem == "notification-worker-duplicates"
+    )
+    text = duplicates.read_text(encoding="utf-8")
+    for series in OWED_BY_CH07:
+        assert f"`{series}`" in text
