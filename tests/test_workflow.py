@@ -352,10 +352,17 @@ def test_deterministic_stages_record_zero_model_calls():
 
 @needs_recordings
 def test_the_metered_completer_bills_the_stage_it_is_set_to():
+    """The label IS the stage string, with no prefix added by the wrapper.
+
+    Changed in Chapter 7, when `MeteredCompleter` moved to `llm.py` to serve a
+    second rung. It used to prepend "workflow." itself, which is a sensible
+    default for exactly one caller and wrong for every other one - a shared
+    utility that names its callers' measurements has not finished being shared.
+    """
     from escalation_ladder.instrument import CostLedger
 
     ledger = CostLedger()
-    metered = MeteredCompleter(inner=replay(), ledger=ledger, stage="draft")
+    metered = MeteredCompleter(inner=replay(), ledger=ledger, stage="workflow.draft")
     metered.parse(system="s", user="u", schema=Grounded)
     assert [m.label for m in ledger.measurements] == ["workflow.draft"]
 

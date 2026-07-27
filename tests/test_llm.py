@@ -306,3 +306,187 @@ def test_a_bad_recording_fails_the_way_production_would():
     result = fake.parse(system="s", user="u", schema=Tiny)
     assert result.parsed is None
     assert result.failed.startswith("schema violated:")
+
+
+# --------------------------------------------------------------------------
+# invoke - one round of tools (Chapter 7)
+#
+# The vendor is stubbed rather than recorded here, because what is being
+# asserted is the SHAPE of the exchange - two requests, tools on both, results
+# fed back in one user turn - and a recording cannot fail when that shape
+# changes. These are the tests that would go red if a future edit turned this
+# seam into a loop.
+# --------------------------------------------------------------------------
+from dataclasses import dataclass as _dataclass  # noqa: E402
+from typing import Any as _Any  # noqa: E402
+
+from escalation_ladder.llm import ToolResult, ToolSpec as _ToolSpec  # noqa: E402
+
+
+@_dataclass
+class _Block:
+    type: str
+    id: str = ""
+    name: str = ""
+    input: dict | None = None
+
+
+@_dataclass
+class _Usage:
+    input_tokens: int = 1000
+    output_tokens: int = 100
+
+
+@_dataclass
+class _Message:
+    content: list
+    stop_reason: str
+    usage: _Usage
+    parsed_output: _Any = None
+
+
+class _StubMessages:
+    def __init__(self, script):
+        self.script = script
+        self.seen = []
+
+    def create(self, **kwargs):
+        self.seen.append(("create", kwargs))
+        return self.script.pop(0)
+
+    def parse(self, **kwargs):
+        self.seen.append(("parse", kwargs))
+        return self.script.pop(0)
+
+
+class _StubClient:
+    def __init__(self, script):
+        self.messages = _StubMessages(script)
+
+
+class _Answer(BaseModel):
+    verdict: str
+
+
+_SPEC = _ToolSpec(
+    name="read_thing",
+    description="Read a thing.",
+    parameters={
+        "type": "object",
+        "properties": {"which": {"type": "string"}},
+        "required": ["which"],
+        "additionalProperties": False,
+    },
+    consequence="read",
+)
+
+_TOOL_BLOCK = _Block("tool_use", "toolu_1", "read_thing", {"which": "a"})
+
+
+def _invoke(script, execute=None):
+    completer = AnthropicCompleter(client=_StubClient(list(script)))
+    run = completer.invoke(
+        system="s",
+        user="u",
+        tools=(_SPEC,),
+        execute=execute or (lambda call: ToolResult(call.call_id, "42")),
+        schema=_Answer,
+    )
+    return run, completer._client.messages.seen
+
+
+def test_invoke_makes_exactly_two_requests_and_no_third():
+    """One round means one round. A third request here would be Level 5."""
+    run, seen = _invoke([
+        _Message([_TOOL_BLOCK], "tool_use", _Usage()),
+        _Message([_Block("text")], "end_turn", _Usage(500, 50), _Answer(verdict="ok")),
+    ])
+    assert run.ok
+    assert [kind for kind, _ in seen] == ["create", "parse"]
+
+
+def test_invoke_sends_every_result_in_one_user_turn():
+    run, seen = _invoke([
+        _Message(
+            [_TOOL_BLOCK, _Block("tool_use", "toolu_2", "read_thing", {"which": "b"})],
+            "tool_use",
+            _Usage(),
+        ),
+        _Message([_Block("text")], "end_turn", _Usage(500, 50), _Answer(verdict="ok")),
+    ])
+    _, second = seen[1]
+    assert [m["role"] for m in second["messages"]] == ["user", "assistant", "user"]
+    assert len(second["messages"][2]["content"]) == 2
+    assert len(run.results) == 2
+
+
+def test_invoke_leaves_the_tools_on_the_second_request():
+    """Removing them would force an answer and hide the Failure Receipt."""
+    _, seen = _invoke([
+        _Message([_TOOL_BLOCK], "tool_use", _Usage()),
+        _Message([_Block("text")], "end_turn", _Usage(500, 50), _Answer(verdict="ok")),
+    ])
+    assert seen[1][1]["tools"]
+
+
+def test_invoke_reports_a_second_round_instead_of_running_it():
+    run, seen = _invoke([
+        _Message([_TOOL_BLOCK], "tool_use", _Usage()),
+        _Message([_TOOL_BLOCK], "tool_use", _Usage(500, 50)),
+    ])
+    assert run.wanted_more
+    assert not run.ok
+    assert len(seen) == 2
+
+
+def test_invoke_bills_both_calls():
+    run, _ = _invoke([
+        _Message([_TOOL_BLOCK], "tool_use", _Usage(1000, 100)),
+        _Message([_Block("text")], "end_turn", _Usage(500, 50), _Answer(verdict="ok")),
+    ])
+    assert run.usage.input_tokens == 1500
+    assert run.usage.output_tokens == 150
+
+
+def test_invoke_refuses_when_no_tool_was_requested():
+    run, seen = _invoke([_Message([_Block("text")], "end_turn", _Usage())])
+    assert run.failed == "the model asked for no tools"
+    assert len(seen) == 1
+
+
+def test_invoke_translates_a_refusal_at_either_call():
+    first, _ = _invoke([_Message([], "refusal", _Usage())])
+    assert first.failed == "the model declined the request"
+    second, _ = _invoke([
+        _Message([_TOOL_BLOCK], "tool_use", _Usage()),
+        _Message([], "refusal", _Usage(500, 50)),
+    ])
+    assert second.failed == "the model declined the request"
+    assert second.usage.input_tokens == 1500
+
+
+def test_invoke_translates_an_unparsable_second_response():
+    run, _ = _invoke([
+        _Message([_TOOL_BLOCK], "tool_use", _Usage()),
+        _Message([_Block("text")], "end_turn", _Usage(500, 50), None),
+    ])
+    assert run.failed == "no parsable content in the response"
+
+
+def test_invoke_never_sends_the_consequence_field_to_the_vendor():
+    _, seen = _invoke([
+        _Message([_TOOL_BLOCK], "tool_use", _Usage()),
+        _Message([_Block("text")], "end_turn", _Usage(500, 50), _Answer(verdict="ok")),
+    ])
+    wire = seen[0][1]["tools"][0]
+    assert "consequence" not in wire
+    assert wire["strict"] is True
+
+
+def test_invoke_rejects_a_non_pydantic_schema_as_programmer_error():
+    completer = AnthropicCompleter(client=_StubClient([]))
+    with pytest.raises(TypeError):
+        completer.invoke(
+            system="s", user="u", tools=(_SPEC,),
+            execute=lambda c: ToolResult(c.call_id, ""), schema=dict,
+        )

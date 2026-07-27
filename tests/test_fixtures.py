@@ -8,7 +8,14 @@ from escalation_ladder.fixtures.incidents import (
     build_db,
     load_incidents,
 )
-from escalation_ladder.fixtures.metrics import _RANGES, query_metric
+from escalation_ladder.fixtures.metrics import (
+    _BASELINE,
+    EPISODES,
+    degraded_at,
+    known_metrics,
+    query_metric,
+)
+from escalation_ladder.fixtures.metrics import _parse
 from escalation_ladder.fixtures.runbooks_index import runbook_paths
 
 
@@ -106,17 +113,11 @@ def test_every_runbook_is_non_empty_markdown():
 # --------------------------------------------------------------------------
 # the metric series the runbooks promise, against the ones the fixture serves
 #
-# Added at Chapter 6's gate. Ch6's Failure Receipt lands on
-# notification-worker-duplicates, whose FIRST check is a ratio between two
-# series the fake metrics API does not have. Ch7 builds tools over that API, so
-# the gap stops being cosmetic there: the tool cannot execute the next step the
-# rung below hands it.
-#
-# The assertion is equality rather than a subset on purpose, so it fails in both
-# directions. Add a runbook naming another unserved metric and it goes red. Add
-# the two missing series in Ch7 and it ALSO goes red, forcing whoever does it to
-# delete this list and close the thread rather than leaving a stale allowance
-# behind.
+# Opened at Chapter 6's gate as an allowance and CLOSED in Chapter 7, which
+# added `messages_sent` and `orders_created`. The assertion is now that nothing
+# a runbook names is unserved, in either direction: add a runbook that tells an
+# engineer to read a series `query_metric` does not have and this goes red
+# before the tool that cannot execute it ever ships.
 # --------------------------------------------------------------------------
 
 _METRIC_TOKEN = re.compile(r"`([a-z][a-z0-9_]{3,})`")
@@ -126,11 +127,6 @@ _QUERY_METRIC = re.compile(r'query_metric\("[^"]+",\s*"([^"]+)"')
 _NOT_METRICS = {
     "query_metric", "tenant_id", "created_at", "max_connections", "order_id",
 }
-
-# Owed by Chapter 7. Both come from notification-worker-duplicates: "Compare
-# `messages_sent` against `orders_created` for the same window. A ratio above
-# 1.1 means redelivery rather than a producer bug."
-OWED_BY_CH07 = {"messages_sent", "orders_created"}
 
 
 def referenced_metrics() -> set[str]:
@@ -143,22 +139,63 @@ def referenced_metrics() -> set[str]:
     return found
 
 
-def test_runbook_metrics_resolve_except_the_series_chapter_seven_owes():
-    missing = referenced_metrics() - set(_RANGES)
-    assert missing == OWED_BY_CH07, (
-        "The runbooks and the metrics fixture have drifted apart. Either a new "
-        "runbook names a series query_metric cannot serve, or Chapter 7 has "
-        "added one of the owed series - in which case delete it from "
-        "OWED_BY_CH07 and update the Ch6 open_threads entry in the book's "
-        f"_book-manifest.yml. Unserved right now: {sorted(missing)}"
+def test_every_metric_a_runbook_names_can_actually_be_read():
+    missing = referenced_metrics() - set(_BASELINE)
+    assert missing == set(), (
+        "A runbook names a series query_metric cannot serve. A tool built on "
+        f"this API cannot execute the step that runbook hands it. Unserved: {sorted(missing)}"
     )
 
 
-def test_the_owed_series_are_the_ones_chapter_sixs_receipt_depends_on():
-    """Pins the gap to its cause, so the list above cannot quietly become junk."""
+def test_the_duplicates_runbook_ratio_is_now_servable():
+    """The two series Chapter 7 owed, pinned to the runbook that needs them."""
     duplicates = next(
         p for p in runbook_paths() if p.stem == "notification-worker-duplicates"
     )
     text = duplicates.read_text(encoding="utf-8")
-    for series in OWED_BY_CH07:
+    for series in ("messages_sent", "orders_created"):
         assert f"`{series}`" in text
+        assert series in known_metrics("notification-worker")
+
+
+def test_metrics_are_quiet_outside_an_incident_window():
+    # A baseline as wide as the plausible range is indistinguishable from an
+    # incident, and every alert threshold would be crossed by ordinary noise.
+    calm = [v for _, v in query_metric("checkout-api", "http_5xx_rate", 60)]
+    assert max(calm) < 0.01
+
+
+def test_metrics_depart_from_baseline_inside_an_incident_window():
+    # INC-1046 is still degrading search-api at NOW, which is what makes it the
+    # incident a live tool can read.
+    live = [v for _, v in query_metric("search-api", "http_5xx_rate", 15)]
+    assert min(live) > 0.05
+    assert degraded_at(
+        "search-api", "http_5xx_rate", _parse("2026-03-21T04:45:00Z")
+    ) == "INC-1046"
+
+
+def test_an_incident_only_moves_the_series_it_touched():
+    # INC-1045's signal is the RATIO: messages_sent quadruples, orders_created
+    # does not move. A fixture that moved every series during an incident would
+    # make the runbook's ratio check meaningless.
+    window = {"ending_at": "2026-03-03T16:50:00Z"}
+    sent = [v for _, v in query_metric("notification-worker", "messages_sent", 15, **window)]
+    orders = [v for _, v in query_metric("notification-worker", "orders_created", 15, **window)]
+    assert min(sent) > 3000.0
+    assert max(orders) < 1200.0
+    assert sum(sent) / sum(orders) > 1.1
+
+
+def test_overlapping_windows_agree_on_the_minutes_they_share():
+    # The sample index is absolute, not relative to the start of the window.
+    short = dict(query_metric("search-api", "p99_latency_ms", 15))
+    long = dict(query_metric("search-api", "p99_latency_ms", 60))
+    shared = set(short) & set(long)
+    assert len(shared) == 15
+    assert all(short[k] == long[k] for k in shared)
+
+
+def test_every_episode_names_a_seeded_incident():
+    ids = {i.incident_id for i in SEED_INCIDENTS}
+    assert {e.incident_id for e in EPISODES} <= ids

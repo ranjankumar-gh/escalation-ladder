@@ -46,7 +46,15 @@ from pydantic import BaseModel
 from escalation_ladder.classify import Classification, classify, decide
 from escalation_ladder.fixtures.incidents import Incident
 from escalation_ladder.instrument import CostLedger, measured
-from escalation_ladder.llm import AnthropicCompleter, Completer, Completion
+# MeteredCompleter moved to llm.py in Chapter 7, where the protocol it
+# implements lives and where Level 4 can reach it without importing Level 3.
+# Re-exported here so callers written against Chapter 6 keep working.
+from escalation_ladder.llm import (
+    AnthropicCompleter,
+    Completer,
+    Completion,
+    MeteredCompleter,
+)
 from escalation_ladder.retrieve import (
     Grounded,
     GroundedAdvice,
@@ -92,32 +100,6 @@ STAGE_INPUT: dict[str, str | None] = {
     "draft": "retrieve",
     "route": "draft",
 }
-
-
-@dataclass
-class MeteredCompleter:
-    """A `Completer` that bills every call to a ledger under the current stage.
-
-    Wraps Chapter 4's seam rather than each stage, which is why `classify.classify`
-    can be measured inside this pipeline without a line changing in `classify.py`.
-    A rung that had to edit the rung below to measure it would have made Chapter
-    16's descent impossible one chapter at a time.
-    """
-
-    inner: Completer
-    ledger: CostLedger
-    stage: str = "classify"
-
-    def parse(
-        self,
-        *,
-        system: str,
-        user: str,
-        schema: type[T],
-        effort: str = "low",
-    ) -> Completion[T]:
-        billed = measured(f"workflow.{self.stage}", self.ledger)(self.inner.parse)
-        return billed(system=system, user=user, schema=schema, effort=effort)
 
 
 @dataclass(frozen=True)
@@ -378,7 +360,9 @@ def advise(
     """
     trace: list[StageRecord] = []
     ledger = CostLedger()
-    metered = MeteredCompleter(inner=completer, ledger=ledger, stage="classify")
+    metered = MeteredCompleter(
+        inner=completer, ledger=ledger, stage="workflow.classify"
+    )
 
     claim = classify(incident, metered)
     classified = not (claim.needs_human or claim.service == "unknown")
@@ -456,7 +440,7 @@ def advise(
             degraded=True,
         )
 
-    metered.stage = "draft"
+    metered.stage = "workflow.draft"
     completion = metered.parse(
         system=DRAFT_SYSTEM,
         user=build_user(incident, claim, hits),
