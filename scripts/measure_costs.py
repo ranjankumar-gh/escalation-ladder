@@ -15,6 +15,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import inspect
+import json
 import math
 import sys
 from pathlib import Path
@@ -35,6 +37,9 @@ COLUMNS: tuple[str, ...] = (
     "p99 latency (ms)",
 )
 
+RECORDINGS = Path(__file__).resolve().parent.parent / "tests" / "recordings"
+USAGE = RECORDINGS / "usage.json"
+
 
 def percentile(values: list[float], pct: float) -> float:
     """Nearest-rank percentile. Zero for an empty series."""
@@ -45,11 +50,27 @@ def percentile(values: list[float], pct: float) -> float:
     return ordered[k]
 
 
-def summarise_ledgers(rung: str, ledgers: list[CostLedger]) -> dict[str, object]:
+def summarise_ledgers(
+    rung: str, ledgers: list[CostLedger], *, replayed: bool = False
+) -> dict[str, object]:
     """Collapse one rung's per-incident ledgers into a single table row.
 
     Tokens and call counts are averaged per incident; latency is reported as percentiles,
     because the tail is what actually hurts in production and an average hides it.
+
+    `replayed` blanks the two latency columns, and refusing to fill them is the
+    point rather than a gap. A replay's elapsed time is the cost of reading a
+    JSON file, so publishing it as p50 would say Level 6 answers in under a
+    millisecond - a number that is real, reproducible, and a lie about the
+    system. Tokens and call counts survive replay because they are properties of
+    the request; latency is a property of the network, and the network is not
+    here. Chapters 4 through 9 carry the measured latencies.
+
+    A rung that made NO model calls keeps its latency even under replay, and
+    that exception is not a special case for Level 0 - it is the same rule. The
+    blanking exists because the network is missing; a rung that never touched
+    the network is not missing anything. The Zero Row is measured on a replay
+    for exactly the reason it is free.
     """
     if not ledgers:
         row: dict[str, object] = dict.fromkeys(COLUMNS, 0)
@@ -69,14 +90,48 @@ def summarise_ledgers(rung: str, ledgers: list[CostLedger]) -> dict[str, object]
 
     n = len(ledgers)
     latencies = [led.total_latency_ms for led in ledgers]
+    # `attempted` is recomputed rather than reused from the guard above, which
+    # returns early: reaching here means the rung was billed, or made no calls
+    # at all. Only the first case has a latency the replay cannot know.
+    off_network = replayed and sum(led.model_calls for led in ledgers) > 0
     return {
         "Rung": rung,
         "Model calls": round(sum(led.model_calls for led in ledgers) / n),
         "Input tokens": round(sum(led.total_input_tokens for led in ledgers) / n),
         "Output tokens": round(sum(led.total_output_tokens for led in ledgers) / n),
-        "p50 latency (ms)": round(percentile(latencies, 50), 1),
-        "p99 latency (ms)": round(percentile(latencies, 99), 1),
+        "p50 latency (ms)": (
+            "not measured" if off_network else round(percentile(latencies, 50), 1)
+        ),
+        "p99 latency (ms)": (
+            "not measured" if off_network else round(percentile(latencies, 99), 1)
+        ),
     }
+
+
+def replay_completer() -> object:
+    """A completer that answers from the recordings and prices from the sidecar.
+
+    Both files are committed, so this path needs no key, no network, and no
+    spend - which is what lets a reader regenerate the table that the book's
+    cost claims rest on rather than taking them on faith.
+    """
+    from escalation_ladder.llm import RecordedCompleter, Usage
+
+    recordings: dict[str, str] = {}
+    for path in sorted(RECORDINGS.glob("ch*.json")):
+        recordings.update(json.loads(path.read_text(encoding="utf-8")))
+
+    priced: dict[str, Usage] = {}
+    if USAGE.exists():
+        for key, entry in json.loads(USAGE.read_text(encoding="utf-8")).items():
+            priced[key] = Usage(
+                int(entry["input_tokens"]), int(entry["output_tokens"])
+            )
+    else:
+        print(f"no {USAGE.name}; token columns will be zero. "
+              "Run scripts/build_usage.py once to create it.", file=sys.stderr)
+
+    return RecordedCompleter(recordings=recordings, usage_by_key=priced)
 
 
 def render_markdown_table(rows: list[dict[str, object]]) -> str:
@@ -94,22 +149,31 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Regenerate the cross-rung cost table.")
     parser.add_argument("--out", type=Path, default=None,
                         help="write the table here instead of stdout")
+    parser.add_argument("--replay", action="store_true",
+                        help="answer from the committed recordings: no key, no spend")
     args = parser.parse_args(argv)
 
     registry = load_all()
     incidents = load_incidents()
+    completer = replay_completer() if args.replay else None
 
     rows: list[dict[str, object]] = []
     for rung, fn in registry.items():
+        # Level 0 has no seam to pass a completer through, and that asymmetry is
+        # the Zero Row being honest rather than an inconsistency to smooth over.
+        takes_completer = "completer" in inspect.signature(fn).parameters
         ledgers: list[CostLedger] = []
         for incident in incidents:
             try:
-                ledgers.append(fn(incident))
+                if completer is not None and takes_completer:
+                    ledgers.append(fn(incident, completer))  # type: ignore[call-arg]
+                else:
+                    ledgers.append(fn(incident))
             except Exception as exc:
                 # A rung failing on an incident it cannot handle is the point of the book,
                 # not a crash. Record it visibly and keep measuring the rest.
                 print(f"  {rung} failed on {incident.incident_id}: {exc}", file=sys.stderr)
-        rows.append(summarise_ledgers(rung, ledgers))
+        rows.append(summarise_ledgers(rung, ledgers, replayed=args.replay))
 
     table = render_markdown_table(rows)
     if args.out is not None:
