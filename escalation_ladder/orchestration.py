@@ -9,8 +9,7 @@ The contract is deliberately smaller than any framework's API. A chain walks a
 FIXED sequence of nodes and stops when the sequence runs out or when `done` says
 the work is finished. There is no cycle in it, no retry policy, and no way to add
 a node while it is running. That is not an abstraction that happens to be small;
-it is the Level 5 boundary expressed as a type, and Chapter 9's first change is
-to break it deliberately.
+it is the Level 5 boundary expressed as a type.
 
 Two implementations, both real, both exercised by the same tests:
 
@@ -18,6 +17,22 @@ Two implementations, both real, both exercised by the same tests:
 the same sequence as a compiled `StateGraph`. Chapter 8's deep dive compares them
 and concludes that at this rung the framework has not yet been earned, so the
 default stays on the standard library and `langgraph` is an optional extra.
+
+Chapter 9 adds `Loop` BESIDE `Chain` rather than replacing it, and the choice is
+worth a sentence because the obvious reading of "Chapter 9 turns the chain into a
+loop" is an edit. It is not one. `reasoning.py` still walks a chain, Chapter 11's
+composite still routes to it, and Chapter 16 cannot walk a system back down to a
+cheap rung whose implementation was deleted to make an expensive one look like
+progress. So the two protocols sit side by side, and the difference between them
+is six lines you can read in one screen - which is the entire Level 5/6 boundary,
+executable.
+
+The difference that matters is not the keyword. In `Chain`, `done` is an
+optimization: delete it and every walk still terminates, because the sequence is
+finite. In `Loop`, `done` IS the termination condition, and a `done` that never
+returns True is a program that never returns. The bound moved out of the
+structure and into a predicate, which is why Chapter 9 spends a section on what
+goes inside that predicate.
 
 That conclusion has a mechanical consequence, which is why the import of
 `langgraph` sits inside the method rather than at the top of this file.
@@ -178,3 +193,135 @@ def chain_named(name: str) -> Chain:
     if name == "langgraph":
         return LangGraphChain()
     raise ValueError(f"unknown chain {name!r}; known: sequential, langgraph")
+
+
+class Loop(Protocol):
+    """Run ONE node until `done` says to stop.
+
+    There is no `nodes` argument and that absence is the rung. A chain took a
+    sequence because the sequence was the design; a loop takes a single node
+    because the design is now "do the thing again", and how many times is a
+    question about the run rather than about the code.
+
+    No implementation of this protocol can state its maximum in advance. That is
+    not a gap to be filled by a better implementation - it is the definition, and
+    `Budget` in `agent.py` is where a caller buys the maximum back at a price.
+    """
+
+    name: str
+
+    def run(
+        self,
+        node: Node[State],
+        initial: State,
+        *,
+        done: Done,
+    ) -> State: ...
+
+
+@dataclass(frozen=True)
+class WhileLoop:
+    """Level 6 orchestration, in four lines. Compare with `SequentialChain`.
+
+    The diff against the chain is one line of control flow, and every property
+    Chapter 8 relied on is in that line. `for node in nodes` could not run a node
+    twice and could not run longer than the sequence. `while not done(state)` can
+    do both, and will, and there is no argument you can pass to this method that
+    changes it.
+    """
+
+    name: str = "while"
+
+    def run(
+        self,
+        node: Node[State],
+        initial: State,
+        *,
+        done: Done,
+    ) -> State:
+        state = initial
+        while not done(state):
+            state = node(state)
+        return state
+
+
+@dataclass(frozen=True)
+class LangGraphLoop:
+    """The same loop as a compiled `StateGraph`, with an edge back to itself.
+
+    This is the version Chapter 8 said it would collect on. A chain gave the
+    framework's checkpointer nothing to do, because there was no run long enough
+    to be worth resuming; a loop that reads live telemetry for several minutes
+    has a genuine mid-run state, and `checkpointer` is how you get it back after
+    a crash.
+
+    `thread` is required when a checkpointer is present - it is the key the saved
+    state is filed under, and passing the incident id makes a resume the same
+    call as the original with the same argument.
+
+    `resume` is NOT a convenience flag, and leaving it off is the trap. Invoking
+    a compiled graph with an input applies that input to the channel, so calling
+    the same graph again with the same starting state overwrites everything the
+    checkpointer restored and quietly runs the whole investigation a second time.
+    Resuming means invoking with `None` and letting the saved state stand. Both
+    versions return the same final answer, which is why the mistake survives a
+    test that only checks the answer - the difference is visible in the bill and
+    nowhere else.
+
+    `recursion_limit` is LangGraph's own circuit breaker and defaults to 25. It
+    is set high here on purpose: the bound this book cares about lives in
+    `agent.Budget`, and leaving a second, invisible cap in the framework would
+    mean a run that stopped for a reason nothing in the ledger could explain.
+    """
+
+    name: str = "langgraph-loop"
+    checkpointer: Any | None = None
+    thread: str = "default"
+    resume: bool = False
+    recursion_limit: int = 500
+
+    def run(
+        self,
+        node: Node[State],
+        initial: State,
+        *,
+        done: Done,
+    ) -> State:
+        # Imported here, not at module scope, for the reason in this module's
+        # docstring: a top-level import would drop two rungs out of the generated
+        # cost table for every reader who skipped the optional extra.
+        from langgraph.graph import END, START, StateGraph
+
+        graph: Any = StateGraph(dict)
+        graph.add_node(node.name, lambda box: {"state": node(box["state"])})
+
+        def branch(box: dict) -> str:
+            return END if done(box["state"]) else node.name
+
+        graph.add_conditional_edges(START, branch, [node.name, END])
+        # The back edge. One line, and it is the whole architecture: the node's
+        # only outgoing route is a conditional that can return to itself.
+        graph.add_conditional_edges(node.name, branch, [node.name, END])
+
+        compiled = graph.compile(checkpointer=self.checkpointer)
+        config: dict[str, Any] = {"recursion_limit": self.recursion_limit}
+        if self.checkpointer is not None:
+            config["configurable"] = {"thread_id": self.thread}
+        if self.resume:
+            if self.checkpointer is None:
+                raise ValueError("resume=True needs a checkpointer to resume from")
+            # None, not the initial state. See the class docstring.
+            return compiled.invoke(None, config)["state"]
+        return compiled.invoke({"state": initial}, config)["state"]
+
+
+DEFAULT_LOOP: Loop = WhileLoop()
+
+
+def loop_named(name: str) -> Loop:
+    """Look up a loop implementation by name, for scripts that compare them."""
+    if name == "while":
+        return WhileLoop()
+    if name == "langgraph":
+        return LangGraphLoop()
+    raise ValueError(f"unknown loop {name!r}; known: while, langgraph")
