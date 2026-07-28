@@ -13,6 +13,15 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.4", "matplotlib>=3.9"]
+# Chapter 8's framework seam. An EXTRA rather than a dependency, and the chapter
+# argues why: `orchestration.SequentialChain` is the shipped default and
+# `LangGraphChain` is the measured comparison beside it. Installing this pulls in
+# 22 further packages on top of the two above, which is the number the Level 5
+# cost table reports. Nothing in the book requires it - the test suite skips its
+# arm when absent, and `rungs.load_all` still registers Level 5, because
+# `orchestration` imports langgraph inside the method rather than at module
+# scope. Chapters 9 and 10 are where the extra starts paying for itself.
+graph = ["langgraph>=1.2,<2.0"]
 
 [build-system]
 requires = ["setuptools>=68"]
