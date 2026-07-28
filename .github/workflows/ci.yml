@@ -83,6 +83,24 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Regenerate the cross-rung cost table
+        # Informational for the same reason as the step above: the assertion is
+        # tests/test_usage.py, which holds each replayed row to a band around
+        # the figure its chapter published. This prints the table so a drift is
+        # readable at a glance rather than inferred from a failed assert.
+        #
+        # No key, which is the whole point. Before the recordings carried their
+        # own usage this table could not be produced in CI at all - it needed a
+        # live run and a bill, so the numbers the book is most often asked to
+        # justify were the ones nothing automatically checked.
+        run: |
+          {
+            echo "### Cross-rung cost table (replayed)"
+            echo '```'
+            python -m scripts.measure_costs --replay
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   latest:
     name: latest in range (drift detector)
     runs-on: ubuntu-latest
