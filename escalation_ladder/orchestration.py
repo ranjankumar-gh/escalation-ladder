@@ -325,3 +325,138 @@ def loop_named(name: str) -> Loop:
     if name == "langgraph":
         return LangGraphLoop()
     raise ValueError(f"unknown loop {name!r}; known: while, langgraph")
+
+
+# Merge N branch results back into one state. The signature is the argument: a
+# fan-out is not finished when its branches are, and somebody has to say what two
+# disagreeing branches produce. A framework that supplies this for you has
+# supplied a default answer to a domain question.
+Merge = Callable[[Any, Sequence[Any]], Any]
+
+
+class Fanout(Protocol):
+    """Run several nodes from ONE state and merge what comes back.
+
+    The third protocol in this file, added in Chapter 10 for the same reason
+    Chapter 9 added the second: because the two that already exist cannot express
+    it. `Chain` walks a sequence and threads state through it, so branch two
+    would see branch one's writes. `Loop` runs one node repeatedly. Neither can
+    hand the same starting state to two nodes and be handed two states back, and
+    that shape - concurrent writes to one state - is precisely what Chapter 8
+    said LangGraph's channels exist for and a linear chain had no use for.
+
+    Chapter 10 builds this, exercises it, and does NOT put it on the default
+    path, because the crew that Chapter 9's receipt earns is three sequential
+    roles and a review cannot begin before the investigation it reviews. The
+    protocol is here so that the deep dive's argument is made against running
+    code rather than against a hypothetical.
+    """
+
+    name: str
+
+    def spread(
+        self,
+        nodes: Sequence[Node[State]],
+        initial: State,
+        *,
+        merge: Merge,
+    ) -> State: ...
+
+
+@dataclass(frozen=True)
+class ThreadFanout:
+    """Branches in threads, merged by a function the caller wrote.
+
+    Threads rather than processes because every branch here is a model call: the
+    work is entirely I/O and the interpreter lock is released for all of it.
+    Threads rather than `asyncio` because the seam in `llm.py` is synchronous,
+    and making it async to parallelize two calls would be a rewrite of every rung
+    to buy what one `ThreadPoolExecutor` already provides.
+
+    `merge` is required and has no default, for the same reason
+    `ToolSpec.consequence` has none in Chapter 7. A default merge is a silent
+    answer to "what happens when the branches disagree?", and disagreement is the
+    interesting case rather than the edge case.
+    """
+
+    name: str = "threads"
+
+    def spread(
+        self,
+        nodes: Sequence[Node[State]],
+        initial: State,
+        *,
+        merge: Merge,
+    ) -> State:
+        from concurrent.futures import ThreadPoolExecutor
+
+        if not nodes:
+            return initial
+        with ThreadPoolExecutor(max_workers=len(nodes)) as pool:
+            branches = list(pool.map(lambda node: node(initial), nodes))
+        return merge(initial, branches)
+
+
+@dataclass(frozen=True)
+class LangGraphFanout:
+    """The same fan-out as a compiled graph, with the merge as a channel reducer.
+
+    This is the shape Chapter 8 named as the receipt that would earn the
+    framework: several nodes writing one channel in a single superstep, with an
+    `Annotated` reducer resolving the writes. Read it beside `ThreadFanout` and
+    the deep dive's comparison is visible without prose - the reducer is the same
+    function, moved from a call site into a type annotation, and what the
+    framework adds is that it becomes impossible to forget to call it.
+
+    That is a real property, and it is worth exactly as much as the number of
+    places you would have forgotten.
+    """
+
+    name: str = "langgraph-fanout"
+
+    def spread(
+        self,
+        nodes: Sequence[Node[State]],
+        initial: State,
+        *,
+        merge: Merge,
+    ) -> State:
+        # Imported here, not at module scope, for the reason in this module's
+        # docstring: a top-level import would drop three rungs out of the
+        # generated cost table for every reader who skipped the optional extra.
+        from typing import Annotated, TypedDict
+
+        from langgraph.graph import END, START, StateGraph
+
+        if not nodes:
+            return initial
+
+        def collect(left: list[Any], right: list[Any]) -> list[Any]:
+            return left + right
+
+        Box = TypedDict("Box", {"seed": Any, "branches": Annotated[list, collect]})
+
+        graph: Any = StateGraph(Box)
+        for node in nodes:
+            graph.add_node(
+                node.name,
+                lambda box, node=node: {"branches": [node(box["seed"])]},
+            )
+            graph.add_edge(START, node.name)
+            graph.add_edge(node.name, END)
+
+        compiled = graph.compile()
+        final = compiled.invoke({"seed": initial, "branches": []})
+        return merge(initial, final["branches"])
+
+
+DEFAULT_FANOUT: Fanout = ThreadFanout()
+
+
+def fanout_named(name: str) -> Fanout:
+    """Look up a fan-out implementation by name, for scripts that compare them."""
+    if name == "threads":
+        return ThreadFanout()
+    if name == "langgraph":
+        return LangGraphFanout()
+    raise ValueError(f"unknown fanout {name!r}; known: threads, langgraph")

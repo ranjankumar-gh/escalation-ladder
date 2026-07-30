@@ -66,10 +66,18 @@ def test_summarise_ledgers_averages_tokens_and_percentiles_latency():
     assert row["p99 latency (ms)"] == 30.0
 
 
-def test_summarise_ledgers_of_no_ledgers_is_a_zero_row():
+def test_summarise_ledgers_of_no_ledgers_is_not_measured():
+    """Amended in Chapter 10, and the old assertion WAS the defect.
+
+    This used to assert a row of ZEROS, which seats a rung that measured nothing
+    beside Level 0, the one rung that genuinely is free. Chapter 10 is the first
+    to reach the branch - two of its three roles have no recordings, so every
+    incident raises and no ledger survives - and a Level 7 row reading "0 tokens"
+    would have advertised the most expensive rung in the book as the cheapest.
+    """
     row = measure_costs.summarise_ledgers("Level 9: Nothing", [])
     assert row["Rung"] == "Level 9: Nothing"
-    assert row["Model calls"] == 0
+    assert row["Model calls"] == "not measured"
     assert set(row) == set(measure_costs.COLUMNS)
 
 

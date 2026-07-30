@@ -66,7 +66,16 @@ def _replayed() -> dict[str, float]:
         total = billed = 0
         for incident in incidents:
             completer = RecordedCompleter(recordings=recordings, usage_by_key=priced)
-            ledger = fn(incident, completer) if takes_completer else fn(incident)
+            try:
+                ledger = fn(incident, completer) if takes_completer else fn(incident)
+            except Exception:
+                # A rung with no recordings of its own cannot be replayed, and
+                # from Chapter 10 there is one: the crew's investigator replays
+                # from Chapter 9's recordings and its other two roles have none.
+                # Skipping leaves it out of `rows`, so it is ABSENT from the
+                # published comparison rather than present with a number it did
+                # not earn.
+                continue
             if ledger.total_input_tokens:
                 total += ledger.total_input_tokens
                 billed += 1

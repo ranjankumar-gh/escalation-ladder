@@ -73,7 +73,13 @@ def summarise_ledgers(
     for exactly the reason it is free.
     """
     if not ledgers:
-        row: dict[str, object] = dict.fromkeys(COLUMNS, 0)
+        # Zeros here were the same defect one layer up. A rung that produced no
+        # ledger at all -- because every incident raised -- measured nothing, and
+        # a row of zeros seats it beside Level 0, which genuinely is free.
+        # Chapter 10 is the first rung to reach this branch: two of its three
+        # roles have no recordings, so the whole rung is unreplayable rather than
+        # cheap.
+        row: dict[str, object] = dict.fromkeys(COLUMNS, "not measured")
         row["Rung"] = rung
         return row
 
@@ -163,6 +169,7 @@ def main(argv: list[str] | None = None) -> int:
         # the Zero Row being honest rather than an inconsistency to smooth over.
         takes_completer = "completer" in inspect.signature(fn).parameters
         ledgers: list[CostLedger] = []
+        failures = 0
         for incident in incidents:
             try:
                 if completer is not None and takes_completer:
@@ -172,7 +179,20 @@ def main(argv: list[str] | None = None) -> int:
             except Exception as exc:
                 # A rung failing on an incident it cannot handle is the point of the book,
                 # not a crash. Record it visibly and keep measuring the rest.
+                failures += 1
                 print(f"  {rung} failed on {incident.incident_id}: {exc}", file=sys.stderr)
+        if failures:
+            # A rung that raised on ANY incident is partially measured, and a
+            # partial average is the defect this repo has now hit four times. The
+            # surviving ledgers are real, but they are the CHEAP incidents by
+            # construction - the ones that failed are the ones that got furthest -
+            # so averaging them publishes a rung as cheaper than it is. Chapter 10
+            # is the first rung to reach this branch: its investigator replays from
+            # Chapter 9's recordings and its other two roles have none.
+            partial: dict[str, object] = dict.fromkeys(COLUMNS, "not measured")
+            partial["Rung"] = f"{rung} (unmeasured on {failures} of {len(incidents)})"
+            rows.append(partial)
+            continue
         rows.append(summarise_ledgers(rung, ledgers, replayed=args.replay))
 
     table = render_markdown_table(rows)

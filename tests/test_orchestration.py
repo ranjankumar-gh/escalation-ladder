@@ -35,8 +35,10 @@ from escalation_ladder.orchestration import (
     SequentialChain,
     WhileLoop,
     chain_named,
+    fanout_named,
     loop_named,
 )
+
 
 def _has_langgraph() -> bool:
     try:
@@ -304,3 +306,99 @@ def test_loop_named_refuses_what_it_does_not_have() -> None:
     assert loop_named("langgraph").name == "langgraph-loop"
     with pytest.raises(ValueError, match="unknown loop"):
         loop_named("autogen")
+
+
+# --------------------------------------------------------------------------
+# Chapter 10 adds a THIRD protocol, and again the two above are untouched.
+#
+# The chain threads state through a sequence, so branch two would see branch
+# one's writes. The loop runs one node repeatedly. Neither can hand one state to
+# several nodes and be handed several back - which is the shape Chapter 8 named
+# as the receipt that would earn LangGraph's channels. Chapter 10 builds it,
+# measures it, and leaves it off the default path, because the crew that Chapter
+# 9's receipt earns is three SEQUENTIAL roles.
+# --------------------------------------------------------------------------
+
+
+def _branch(tag: int):  # type: ignore[no-untyped-def]
+    return Node(name=f"branch{tag}", fn=lambda seen: tuple(seen) + (tag,))
+
+
+def _union(seed, branches):  # type: ignore[no-untyped-def]
+    merged = list(seed)
+    for branch in branches:
+        merged += [item for item in branch if item not in merged]
+    return tuple(sorted(merged))
+
+
+FANOUTS = ["threads"] + (["langgraph"] if _has_langgraph() else [])
+
+
+@pytest.mark.parametrize("name", FANOUTS)
+def test_every_branch_sees_the_same_starting_state(name: str) -> None:
+    """The defining property, and the one a chain cannot provide.
+
+    Each branch appends to the seed it was given. If any branch saw another's
+    write, the merged result would contain a value twice or the branches would
+    have run in a fixed order - and this asserts neither happened.
+    """
+    fanout = fanout_named(name)
+    result = fanout.spread([_branch(1), _branch(2), _branch(3)], (0,), merge=_union)
+    assert result == (0, 1, 2, 3)
+
+
+@pytest.mark.parametrize("name", FANOUTS)
+def test_both_implementations_agree(name: str) -> None:
+    """What makes Chapter 10's comparison a comparison rather than an anecdote."""
+    nodes = [_branch(7), _branch(4)]
+    assert fanout_named(name).spread(nodes, (1,), merge=_union) == (1, 4, 7)
+
+
+@pytest.mark.parametrize("name", FANOUTS)
+def test_an_empty_fanout_returns_the_seed(name: str) -> None:
+    assert fanout_named(name).spread([], ("seed",), merge=_union) == ("seed",)
+
+
+def test_the_merge_has_no_default() -> None:
+    """`merge` is keyword-only and required, for Chapter 7's `consequence` reason.
+
+    A default merge is a silent answer to "what happens when the branches
+    disagree?", and disagreement is the interesting case rather than the edge
+    case. Asserted against the signature so a later convenience default fails
+    here rather than in production.
+    """
+    import inspect
+
+    from escalation_ladder.orchestration import Fanout, ThreadFanout
+
+    signature = inspect.signature(ThreadFanout.spread)
+    merge = signature.parameters["merge"]
+    assert merge.kind is inspect.Parameter.KEYWORD_ONLY
+    assert merge.default is inspect.Parameter.empty
+    assert hasattr(Fanout, "spread")
+
+
+def test_the_fanout_is_not_on_any_rungs_default_path() -> None:
+    """Chapter 10 declines Chapter 8's channel receipt, and this is the assertion.
+
+    A crew of three sequential roles has no concurrent writes. If a later chapter
+    routes a rung through a fan-out, this test should be deleted deliberately -
+    the same way Chapter 9 had to leave `test_a_node_never_runs_twice` standing
+    rather than repair it.
+    """
+    import escalation_ladder.crew as crew
+
+    source = ast.parse(Path(crew.__file__).read_text(encoding="utf-8"))
+    names = {
+        node.id for node in ast.walk(source) if isinstance(node, ast.Name)
+    } | {
+        node.attr for node in ast.walk(source) if isinstance(node, ast.Attribute)
+    }
+    assert "spread" not in names
+    assert not {"ThreadFanout", "LangGraphFanout", "DEFAULT_FANOUT"} & names
+
+
+def test_fanout_named_refuses_what_it_does_not_have() -> None:
+    assert fanout_named("threads").name == "threads"
+    with pytest.raises(ValueError, match="unknown fanout"):
+        fanout_named("crewai")
