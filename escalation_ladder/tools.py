@@ -45,6 +45,12 @@ from escalation_ladder.fixtures.metrics import (
     query_metric,
 )
 from escalation_ladder.instrument import CostLedger, measured
+# Level 4 importing Level 2, which is the direction that is allowed and the one
+# `agent.py` has used since Chapter 9. A tool is a capability, and a capability
+# the system already has is the cheapest kind to offer. The edge that would be
+# fatal is the reverse one - `retrieve` importing `tools` would make Chapter
+# 16's descent to Level 2 impossible.
+from escalation_ladder.retrieve import Index, default_index, search
 from escalation_ladder.llm import (
     AnthropicCompleter,
     Completer,
@@ -143,26 +149,59 @@ ROLLBACK_DEPLOY = ToolSpec(
     consequence="write",
 )
 
+# Added in Chapter 15, and the addition is the demonstration. One entry in this
+# tuple reaches Levels 4, 5, and 6 at once, because all three read their menu
+# from `menu_for` rather than each holding its own list. It is `consequence:
+# read`, so `blast_radius` does not move.
+#
+# Default OFF, and that is the chapter's second point rather than caution.
+# Offering a tool changes the prompt for three rungs, so the code cost of this
+# addition is one line and the evaluation cost is three rungs re-scored. A flag
+# is what lets those two numbers be paid at different times.
+SEARCH_RUNBOOKS = ToolSpec(
+    name="search_runbooks",
+    description=(
+        "Search the runbook and past-incident corpus for a written procedure. "
+        "Returns the best-matching passages with citable identifiers."
+    ),
+    parameters=_object(
+        {"query": {"type": "string"}},
+        ["query"],
+    ),
+    consequence="read",
+)
+
 TOOLS: tuple[ToolSpec, ...] = (
     QUERY_METRIC,
     RECENT_DEPLOYS,
     SEARCH_LOGS,
+    SEARCH_RUNBOOKS,
     ROLLBACK_DEPLOY,
 )
 
 TOOL_BY_NAME: dict[str, ToolSpec] = {spec.name: spec for spec in TOOLS}
 
-
-def menu_for(*, allow_writes: bool = False) -> tuple[ToolSpec, ...]:
+def menu_for(
+    *, allow_writes: bool = False, allow_runbooks: bool = False
+) -> tuple[ToolSpec, ...]:
     """The tools a model is offered. Read-only unless a caller says otherwise.
 
     The default is the security property. A team that adds a write tool gets it
     excluded until somebody writes `allow_writes=True` at a call site, in a diff,
     with a reviewer - rather than getting it exposed the moment it is defined.
+
+    `allow_runbooks` is the same mechanism used for a capability rather than for
+    a permission, and it deliberately does NOT generalize into a registry of
+    flag names. The write filter reads `consequence`, which is a field every
+    tool must fill in; a name-keyed registry would exclude the tools somebody
+    remembered to list, which is the convention this seam exists to avoid.
     """
-    if allow_writes:
-        return TOOLS
-    return tuple(spec for spec in TOOLS if spec.consequence == "read")
+    return tuple(
+        spec
+        for spec in TOOLS
+        if (allow_writes or spec.consequence == "read")
+        and (allow_runbooks or spec.name != SEARCH_RUNBOOKS.name)
+    )
 
 
 def blast_radius(tools: tuple[ToolSpec, ...]) -> tuple[str, ...]:
@@ -293,6 +332,13 @@ class Toolbox:
     incident: Incident
     allow_writes: bool = False
     calls: list[ToolCall] = field(default_factory=list)
+    _index: Index | None = field(default=None, repr=False, compare=False)
+
+    def _corpus(self) -> Index:
+        """Built once per investigation, and never containing this incident."""
+        if self._index is None:
+            self._index = default_index(self.incident)
+        return self._index
 
     @property
     def until(self) -> str:
@@ -377,6 +423,25 @@ class Toolbox:
             )
         body = "\n".join(line.render() for line in lines)
         return ToolResult(call.call_id, f"{len(lines)} matching lines\n{body}")
+
+    def _search_runbooks(self, call: ToolCall) -> ToolResult:
+        query = str(call.arguments.get("query", ""))
+        hits = search(self._corpus(), query)
+        if not hits:
+            # Chapter 5's floor, reaching a tool result unchanged. An empty
+            # tuple is how "this corpus does not answer that" leaves `search`,
+            # and turning it into a legible error rather than an empty string
+            # is what lets the model correct itself inside the round.
+            return self._error(
+                call, f"no passage scores above the floor for {query!r}"
+            )
+        body = "\n\n".join(
+            f"[{hit.passage.passage_id}] {hit.passage.source} "
+            f"(score {hit.score:.2f}, matched {', '.join(hit.matched)})\n"
+            f"{hit.passage.text}"
+            for hit in hits
+        )
+        return ToolResult(call.call_id, f"{len(hits)} passages for {query!r}\n{body}")
 
     def _rollback_deploy(self, call: ToolCall) -> ToolResult:
         raise AssertionError(
@@ -477,8 +542,15 @@ def investigate(
     completer: Completer,
     *,
     allow_writes: bool = False,
+    tools: tuple[ToolSpec, ...] | None = None,
 ) -> Investigation:
-    """Read live telemetry in one round, then route on what it showed."""
+    """Read live telemetry in one round, then route on what it showed.
+
+    `tools` was added in Chapter 15 and is the generalization of `allow_writes`,
+    not a second flag beside it. A rung that takes a boolean per kind of tool
+    has to be edited for every new kind; a rung that takes a menu never has to
+    be edited again. The default reproduces Chapter 7 exactly.
+    """
     ledger = CostLedger()
     box = Toolbox(incident=incident, allow_writes=allow_writes)
     metered = MeteredCompleter(inner=completer, ledger=ledger, stage="tools.model")
@@ -490,7 +562,7 @@ def investigate(
     run_result = metered.invoke(
         system=SYSTEM,
         user=build_user(incident),
-        tools=menu_for(allow_writes=allow_writes),
+        tools=menu_for(allow_writes=allow_writes) if tools is None else tools,
         execute=execute,
         schema=Finding,
     )

@@ -48,7 +48,7 @@ from escalation_ladder.fixtures.incidents import Incident, load_incidents
 from escalation_ladder.instrument import CostLedger, Measurement
 from escalation_ladder.llm import ToolCall, ToolRun, Usage
 from escalation_ladder.orchestration import WhileLoop
-from escalation_ladder.tools import TOOLS, blast_radius, menu_for
+from escalation_ladder.tools import ROLLBACK_DEPLOY, blast_radius, menu_for
 
 INCIDENTS = {i.incident_id: i for i in load_incidents()}
 RECORDINGS = Path(__file__).parent / "recordings" / "ch09_agent.json"
@@ -619,7 +619,16 @@ def test_one_agent_that_can_act_carries_write_authority_into_every_round() -> No
     assert reachable != ()
     assert any("rollback" in item for item in reachable)
     # And it is reachable from every round, because there is only one menu.
-    assert menu_for(allow_writes=True) == TOOLS
+    #
+    # AMENDED IN CHAPTER 15, and the amendment is the lesson. This asserted
+    # `menu_for(allow_writes=True) == TOOLS`, which was true only while every
+    # tool was either offered or a write. Chapter 15 adds a third state and the
+    # assertion failed without the property it was defending having changed at
+    # all. It now states the property: granting writes withholds nothing else.
+    granted = menu_for(allow_writes=True)
+    assert all(spec in granted for spec in menu_for())
+    assert ROLLBACK_DEPLOY in granted
+    assert len(granted) == len(menu_for()) + 1
 
 
 def test_a_dry_run_records_the_write_and_performs_nothing() -> None:

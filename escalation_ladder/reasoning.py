@@ -60,7 +60,13 @@ from escalation_ladder.orchestration import DEFAULT_CHAIN, Chain, Node
 from escalation_ladder.rules import SEVERITIES, RoutingDecision
 from escalation_ladder.rules import escalation_after, owner_for
 from escalation_ladder.rungs import register_rung
-from escalation_ladder.tools import Finding, Toolbox, menu_for, value_supported
+from escalation_ladder.tools import (
+    Finding,
+    Toolbox,
+    ToolSpec,
+    menu_for,
+    value_supported,
+)
 
 
 @dataclass(frozen=True)
@@ -260,6 +266,7 @@ def _step_node(
     completer: Completer,
     box: Toolbox,
     ledger: CostLedger,
+    tools: tuple[ToolSpec, ...] | None = None,
 ) -> Node[ChainState]:
     """Build the node that runs one step. The closure holds the run's context so
     the walked state stays a plain value the framework can carry."""
@@ -278,7 +285,7 @@ def _step_node(
         run_result = metered.invoke(
             system=SYSTEM,
             user=carried(state, step, index, total),
-            tools=menu_for(),
+            tools=menu_for() if tools is None else tools,
             execute=execute,
             schema=Finding,
         )
@@ -454,6 +461,7 @@ def reason(
     steps: tuple[Step, ...] = STEPS,
     chain: Chain | None = None,
     initial: ChainState | None = None,
+    tools: tuple[ToolSpec, ...] | None = None,
 ) -> Reasoning:
     """Walk the chain, then route on what it established.
 
@@ -472,7 +480,7 @@ def reason(
     start = initial if initial is not None else ChainState(incident=incident)
 
     nodes = [
-        _step_node(step, index, len(steps), completer, box, ledger)
+        _step_node(step, index, len(steps), completer, box, ledger, tools)
         for index, step in enumerate(steps)
     ]
     final = walker.walk(nodes, start, done=lambda state: state.finished)

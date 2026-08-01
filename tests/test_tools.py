@@ -32,6 +32,7 @@ from escalation_ladder.llm import (
 )
 from escalation_ladder.tools import (
     ROLLBACK_DEPLOY,
+    SEARCH_RUNBOOKS,
     TOOLS,
     WINDOWS,
     Finding,
@@ -122,6 +123,89 @@ def test_blast_radius_of_the_shipped_menu_is_empty():
     # not from a claim about the prompt.
     assert blast_radius(menu_for()) == ()
     assert len(blast_radius(menu_for(allow_writes=True))) == 1
+
+
+# Chapter 15's addition. Five assertions, and the third is the one that made
+# the change safe to make at all.
+def test_the_runbook_tool_is_defined_and_not_offered():
+    assert SEARCH_RUNBOOKS in TOOLS
+    assert SEARCH_RUNBOOKS not in menu_for()
+    assert SEARCH_RUNBOOKS in menu_for(allow_runbooks=True)
+
+
+def test_a_read_capability_moves_no_blast_radius():
+    """The cheap kind of capability addition, and why it is the cheap kind.
+
+    A new tool changes what the system can find. Only `consequence` changes
+    what it can break, and this one does not touch it - so the number a design
+    review is handed is identical before and after.
+    """
+    assert blast_radius(menu_for(allow_runbooks=True)) == ()
+    assert len(blast_radius(menu_for(allow_writes=True, allow_runbooks=True))) == 1
+
+
+def test_the_default_menu_is_unchanged_from_chapter_sevens():
+    """Why every prior test and every recorded figure survived the addition.
+
+    The default menu is part of the prompt. Holding it fixed is what lets a
+    capability be added in one commit and evaluated in another, instead of
+    invalidating every measurement in the book on the way past.
+    """
+    assert [spec.name for spec in menu_for()] == [
+        "query_metric",
+        "recent_deploys",
+        "search_logs",
+    ]
+
+
+def test_the_runbook_tool_refuses_below_the_retrieval_floor():
+    """Chapter 5's empty tuple, arriving in a tool result unchanged."""
+    box = Toolbox(incident=incident("INC-1046"))
+    result = box.execute(
+        ToolCall("x", "search_runbooks", {"query": "quarterly revenue forecast"})
+    )
+    assert result.is_error
+    assert "above the floor" in result.content
+
+
+def test_the_runbook_tool_returns_citable_passages():
+    """The query INC-1046 needed and no Level 4 menu could express.
+
+    Note what it takes to clear the floor: the words a report contains, not the
+    word a human would type. That is Chapter 5's lexical result reaching Level
+    4 unchanged, and it is why this tool is a hypothesis rather than a fix.
+    """
+    box = Toolbox(incident=incident("INC-1046"))
+    result = box.execute(
+        ToolCall(
+            "x",
+            "search_runbooks",
+            {"query": "search-api reindex job saturating disk io"},
+        )
+    )
+    assert not result.is_error
+    assert "search-api-reindex" in result.content
+
+
+def test_the_corpus_a_tool_reads_excludes_the_incident_it_is_reading_for():
+    """Chapter 5's `exclude_incident`, which a new caller could have skipped.
+
+    A tool built on `default_index` inherits the exclusion. One built on
+    `build_corpus()` with no argument would retrieve the incident's own root
+    cause and score perfectly while measuring nothing. The same query proves
+    both halves: INC-1044's own passage is retrievable for a different
+    incident and unreachable for itself.
+    """
+    query = {"query": "service mesh certificate expiry"}
+    other = Toolbox(incident=incident("INC-1046")).execute(
+        ToolCall("x", "search_runbooks", query)
+    )
+    itself = Toolbox(incident=incident("INC-1044")).execute(
+        ToolCall("x", "search_runbooks", query)
+    )
+
+    assert "INC-1044" in other.content
+    assert "INC-1044" not in itself.content
 
 
 def test_every_tool_declares_a_consequence():

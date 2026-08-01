@@ -57,7 +57,13 @@ from escalation_ladder.retrieve import Passage, build_index, search
 from escalation_ladder.rules import SEVERITIES, RoutingDecision
 from escalation_ladder.rules import escalation_after, owner_for
 from escalation_ladder.rungs import register_rung
-from escalation_ladder.tools import Finding, Toolbox, menu_for, value_supported
+from escalation_ladder.tools import (
+    Finding,
+    Toolbox,
+    ToolSpec,
+    menu_for,
+    value_supported,
+)
 
 
 class Verdict(Finding):
@@ -641,6 +647,7 @@ def _round_node(
     *,
     allow_writes: bool,
     honor_unreachable: bool = True,
+    tools: tuple[ToolSpec, ...] | None = None,
 ) -> Node[AgentState]:
     """Build the node the loop runs. One node, run until `done` says otherwise.
 
@@ -664,7 +671,9 @@ def _round_node(
         run_result = metered.invoke(
             system=SYSTEM,
             user=working(state),
-            tools=menu_for(allow_writes=allow_writes),
+            tools=(
+                menu_for(allow_writes=allow_writes) if tools is None else tools
+            ),
             execute=execute,
             schema=Verdict,
         )
@@ -749,6 +758,7 @@ def pursue(
     honor_unreachable: bool = True,
     box: Toolbox | None = None,
     initial: AgentState | None = None,
+    tools: tuple[ToolSpec, ...] | None = None,
 ) -> Pursuit:
     """Investigate until the agent stops, the vendor fails, or a bound fires.
 
@@ -793,6 +803,7 @@ def pursue(
         ledger,
         allow_writes=allow_writes,
         honor_unreachable=honor_unreachable,
+        tools=tools,
     )
     final = walker.run(
         node,

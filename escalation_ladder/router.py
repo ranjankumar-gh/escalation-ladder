@@ -240,7 +240,11 @@ def _unanswered(incident: Incident, ask: Ask, reason_text: str) -> RoutingDecisi
 
 
 def try_rung(
-    incident: Incident, level: int, completer: Completer | None = None
+    incident: Incident,
+    level: int,
+    completer: Completer | None = None,
+    *,
+    options: Mapping[int, Mapping[str, object]] | None = None,
 ) -> tuple[Attempt, RoutingDecision, CostLedger]:
     """Run exactly one rung and price it, without any ladder around it.
 
@@ -250,6 +254,11 @@ def try_rung(
     below it refused, which are the hard ones, so every upper point would be
     measured on a biased sample of the corpus and the Effective Level would be
     read against a curve the composite never actually faced.
+
+    `options` is per-level keyword arguments, added in Chapter 15 so an
+    experiment can vary one rung's configuration without a second cascade
+    existing to drift from this one. Empty by default, so every measured figure
+    in Chapters 11 to 14 is produced by the same code path as before.
     """
     rung = RUNGS[level]
     step = CostLedger()
@@ -258,7 +267,8 @@ def try_rung(
         metered = MeteredCompleter(
             inner=completer, ledger=step, stage=f"router.L{level}"
         )
-    result = rung.call(incident, metered)
+    extra = dict((options or {}).get(level, {}))
+    result = rung.call(incident, metered, **extra)
     decision = rung.decision(result)
     attempt = Attempt(
         level=level,
@@ -277,6 +287,7 @@ def handle(
     completer: Completer | None = None,
     *,
     budget: Mapping[Ask, int] | None = None,
+    options: Mapping[int, Mapping[str, object]] | None = None,
 ) -> Outcome:
     """Walk one ask's ladder, stopping at the first rung that answers.
 
@@ -296,7 +307,9 @@ def handle(
     for level in ladder:
         if level > 0 and active is None:
             active = AnthropicCompleter()
-        attempt, decision, step = try_rung(incident, level, active)
+        attempt, decision, step = try_rung(
+            incident, level, active, options=options
+        )
         for measurement in step.measurements:
             ledger.record(measurement)
         attempts.append(attempt)
