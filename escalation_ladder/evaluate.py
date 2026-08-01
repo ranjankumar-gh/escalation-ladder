@@ -617,7 +617,7 @@ def checkable_first(incident: Incident, claim: Classification) -> bool:
     answer here. Where it does, the judge is not cheaper, faster, or more
     trustworthy -- it is none of the three.
     """
-    return evidence_supported(incident, claim)
+    return evidence_supported(claim, incident)
 
 
 def observe(

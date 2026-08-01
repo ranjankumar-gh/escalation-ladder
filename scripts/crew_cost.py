@@ -353,8 +353,17 @@ def _derived(carry: str) -> float | None:
     return sum(totals) / len(totals)
 
 
-def _priced(rows: list[Row], carry: str) -> float:
-    """Mean added INPUT tokens per incident, counted rather than estimated."""
+def _priced(rows: list[Row], carry: str) -> float | None:
+    """Mean added INPUT tokens per incident, counted rather than estimated.
+
+    Returns None on an empty ledger, exactly as `_derived` does. It used to
+    return 0.0, which the caller's `is None` guard waved straight through: zero
+    priced prompts printed `crew added input 0` and `cost ratio R 1.000x` - a
+    complete Break-Even result with no measurement under it. That is this
+    project's recurring defect arriving through one more door, in the file whose
+    own docstrings claim to have shut it. A partial measurement does not look
+    partial, it looks CHEAP.
+    """
     completer = _recorded()
     totals: list[int] = []
     by_id = {incident.incident_id: incident for incident in load_incidents()}
@@ -371,7 +380,7 @@ def _priced(rows: list[Row], carry: str) -> float:
             + _count_tokens(REMEDIATE_SYSTEM + "\n" + second)
         )
     if not totals:
-        return 0.0
+        return None
     return sum(totals) / len(totals)
 
 

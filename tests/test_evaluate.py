@@ -29,6 +29,7 @@ from escalation_ladder.evaluate import (
     observe,
     re_ask,
     replay,
+    checkable_first,
     samples_needed,
     score,
 )
@@ -232,3 +233,34 @@ def test_a_recorded_prompt_is_not_counted_as_a_miss():
         schema=classify.Classification,
     )
     assert completer.misses == 0
+
+
+def test_the_floor_test_for_evals_actually_runs():
+    """checkable_first shipped with its arguments swapped, and nothing called it.
+
+    `evidence_supported(claim, incident)` reads `claim.evidence` and
+    `incident.report`; called the other way round it reads `Incident.evidence`
+    and `Classification.report`, neither of which exists, so the one function
+    Chapter 13 offers as the Floor Test for evals raised AttributeError on every
+    input. It had no caller and no test, which is why a swap survived.
+    """
+    incident = next(i for i in INCIDENTS if i.incident_id == "INC-1042")
+    quote = incident.report.split(".")[0]
+
+    supported = classify.Classification(
+        service="payment-gateway",
+        severity="SEV2",
+        evidence=quote,
+        summary="x",
+        needs_human=False,
+    )
+    assert checkable_first(incident, supported) is True
+
+    invented = classify.Classification(
+        service="payment-gateway",
+        severity="SEV2",
+        evidence="a sentence that is not in the report",
+        summary="x",
+        needs_human=False,
+    )
+    assert checkable_first(incident, invented) is False
