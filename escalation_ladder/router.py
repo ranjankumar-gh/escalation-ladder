@@ -288,6 +288,7 @@ def handle(
     *,
     budget: Mapping[Ask, int] | None = None,
     options: Mapping[int, Mapping[str, object]] | None = None,
+    ladders: Mapping[Ask, tuple[int, ...]] | None = None,
 ) -> Outcome:
     """Walk one ask's ladder, stopping at the first rung that answers.
 
@@ -296,9 +297,17 @@ def handle(
     constructs a client, so it cannot fail on a missing credential, a rate
     limit, or a degraded provider. Chapter 3's argument about coupling incident
     response to a vendor's availability is enforced here by the call graph.
+
+    `ladders` is the whole routing configuration, added in Chapter 16 so a
+    descent can run the ladder with a rung and the ladder without it against one
+    corpus in one process. Supplying it also supplies the budget, because a
+    budget derived from the shipped ladder would silently truncate a different
+    one. Omitted, everything behaves exactly as it has since Chapter 11.
     """
-    allowed = dict(BUDGET if budget is None else budget)
-    ladder = LADDERS[ask][: max(0, allowed.get(ask, 0))]
+    routes = LADDERS if ladders is None else ladders
+    fallback = BUDGET if ladders is None else {a: len(r) for a, r in routes.items()}
+    allowed = dict(fallback if budget is None else budget)
+    ladder = routes[ask][: max(0, allowed.get(ask, 0))]
     ledger = CostLedger()
     attempts: list[Attempt] = []
     active: Completer | None = completer
