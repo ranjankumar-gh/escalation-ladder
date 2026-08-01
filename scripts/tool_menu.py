@@ -37,6 +37,15 @@ from escalation_ladder.tools import SEARCH_RUNBOOKS, menu_for
 TARGET = "INC-1043"
 NEIGHBOR = "INC-1044"
 
+# MEASURED, not the folk 4:1. Chapter 10 calibrated characters per token against
+# `usage.json` for exactly this kind of content - tool schemas, service
+# identifiers, and timestamps rather than English prose - and got 1.51 on a first
+# round drifting to 1.73 by a fourth. Dividing schema characters by four
+# understates the count by well over a factor of two, which is the same
+# looks-cheap-because-it-is-partial defect `scripts/crew_cost.py` refuses to
+# commit. A range is printed because a range is what was measured.
+CHARS_PER_TOKEN = (1.51, 1.73)
+
 
 def structural_cost() -> dict[str, int]:
     """What the addition costs before anything runs. No key, no network."""
@@ -62,7 +71,9 @@ def main() -> None:
     print(
         f"tool schema:        {cost['schema_chars_before']:,} -> "
         f"{cost['schema_chars_after']:,} chars "
-        f"(+{cost['added_chars']:,}, about {cost['added_chars'] // 4} tokens)"
+        f"(+{cost['added_chars']:,}, about "
+        f"{round(cost['added_chars'] / CHARS_PER_TOKEN[1])}-"
+        f"{round(cost['added_chars'] / CHARS_PER_TOKEN[0])} tokens)"
     )
     print("paid on every round at Levels 4, 5, and 6, used or not.")
     print(f"diagnose ladder held at {LADDERS['diagnose']}, unchanged.")
@@ -97,10 +108,9 @@ def main() -> None:
             completer=AnthropicCompleter(),
             options=options,
         )
-        answered = outcome.decision.owner is not None
         print(
             f"{incident_id}: level_reached={outcome.level_reached} "
-            f"answered={answered} attempts={len(outcome.attempts)}"
+            f"answered={outcome.answered} attempts={len(outcome.attempts)}"
         )
     print("\nBoth lines must hold. One of two is a regression, not a result.")
 
